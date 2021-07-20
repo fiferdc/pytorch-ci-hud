@@ -6,6 +6,11 @@
 import React, { Component, Fragment } from "react";
 import AsOf from "./AsOf.js";
 import { summarize_job, summarize_date } from "./Summarize.js";
+import {
+  BsFillCaretRightFill,
+  BsFillCaretDownFill,
+  FaLastfmSquare,
+} from "react-icons/all";
 import Tooltip from "rc-tooltip";
 import axios from "axios";
 
@@ -67,6 +72,7 @@ function objToStrMap(obj) {
   return strMap;
 }
 
+ 
 export default class BuildHistoryDisplay extends Component {
   constructor(props) {
     super(props);
@@ -82,6 +88,7 @@ export default class BuildHistoryDisplay extends Component {
     if (!("showServiceJobs" in prefs)) prefs["showServiceJobs"] = true;
     return {
       builds: [],
+      showGroups: [],
       known_jobs: [],
       currentTime: new Date(),
       updateTime: new Date(0),
@@ -273,149 +280,362 @@ export default class BuildHistoryDisplay extends Component {
     return !(isDockerJob || name === "welcome" || isGCJob);
   }
 
-  render() {
-    function result_icon(result) {
-      if (is_success(result))
-        return (
-          <span role="img" style={{ color: "green" }} aria-label="passed">
-            0
-          </span>
-        );
-      if (is_skipped(result))
-        return (
-          <span role="img" style={{ color: "gray" }} aria-label="skipped">
-            S
-          </span>
-        );
-      if (is_failure(result))
-        return (
-          <span role="img" style={{ color: "red" }} aria-label="failed">
-            X
-          </span>
-        );
-      if (is_aborted(result))
-        return (
-          <span role="img" style={{ color: "gray" }} aria-label="cancelled">
-            .
-          </span>
-        );
-      if (is_pending(result))
-        return (
-          <span
-            className="animate-flicker"
-            role="img"
-            style={{ color: "goldenrod" }}
-            aria-label="in progress"
-          >
-            ?
-          </span>
-        );
-      if (is_infra_failure(result))
-        return (
-          <span role="img" style={{ color: "grey" }} aria-label="failed">
-            X
-          </span>
-        );
-      return result;
-    }
+  result_icon(result) {
+    if (is_success(result))
+      return (
+        <span role="img" style={{ color: "green" }} aria-label="passed">
+          0
+        </span>
+      );
+    if (is_skipped(result))
+      return (
+        <span role="img" style={{ color: "gray" }} aria-label="skipped">
+          S
+        </span>
+      );
+    if (is_failure(result))
+      return (
+        <span role="img" style={{ color: "red" }} aria-label="failed">
+          X
+        </span>
+      );
+    if (is_aborted(result))
+      return (
+        <span role="img" style={{ color: "gray" }} aria-label="cancelled">
+          .
+        </span>
+      );
+    if (is_pending(result))
+      return (
+        <span
+          className="animate-flicker"
+          role="img"
+          style={{ color: "goldenrod" }}
+          aria-label="in progress"
+        >
+          ?
+        </span>
+      );
+    if (is_infra_failure(result))
+      return (
+        <span role="img" style={{ color: "grey" }} aria-label="failed">
+          X
+        </span>
+      );
+    return result;
+  }
 
+  drop_pr_number(msg) {
+    return msg.replace(/\(#[0-9]+\)/, "");
+  }
+
+  renderPullRequestNumber(comment) {
+    let m = comment.match(/\(#(\d+)\)/);
+    if (m) {
+      return (
+        <Fragment>
+          <a
+            href={"https://github.com/pytorch/pytorch/pull/" + m[1]}
+            target="_blank"
+          >
+            #{m[1]}
+          </a>
+        </Fragment>
+      );
+    }
+    m = comment.match(/https:\/\/github.com\/pytorch\/pytorch\/pull\/(\d+)/);
+    if (m) {
+      return (
+        <Fragment>
+          <a
+            href={"https://github.com/pytorch/pytorch/pull/" + m[1]}
+            target="_blank"
+          >
+            #{m[1]}
+          </a>
+        </Fragment>
+      );
+    }
+    return <Fragment />;
+  }
+
+  render() {
     let builds = this.state.builds;
+
+    let groups = [
+      {
+        regex: /Lint/,
+        name: "Lint Jobs",
+        items: [],  // list of header cells in this group
+        rowItems: {},  // map of hash -> items in this group
+      },
+    ];
     let consecutive_failure_count = this.state.consecutive_failure_count;
 
-    const visible_jobs = this.state.known_jobs.filter((name) =>
+    const findGroup = (jobName) => {
+      for (const group of groups) {
+        if (jobName.match(group.regex)) {
+          return group;
+        }
+      }
+      return null;
+    };
+
+    const shouldShowGroup = (group) => {
+      for (const stateGroup of this.state.showGroups) {
+        if (stateGroup.name === group.name) {
+          return true;
+        }
+      }
+      return false;
+    }
+
+
+    const visibleJobs = this.state.known_jobs.filter((name) =>
       this.shouldShowJob(name)
     );
-    const visible_jobs_head = visible_jobs.map((jobName) => (
-      <th className="rotate" key={jobName}>
-        <div
-          className={
-            consecutive_failure_count.has(jobName) ? "failing-header" : ""
+    const visibleJobsHeaders = [];
+    for (const jobName of visibleJobs) {
+      const group = findGroup(jobName);
+      const header = (
+        <th className="rotate" key={jobName}>
+          <div
+            className={
+              consecutive_failure_count.has(jobName) ? "failing-header" : ""
+            }
+          >
+            {summarize_job(jobName)}
+          </div>
+        </th>
+      );
+
+      if (group) {
+        if (shouldShowGroup(group)) {
+          // toggled open, show the group
+          console.log("toggled open");
+        visibleJobsHeaders.push(header);
+
+        } else {
+          console.log("Skipping", jobName);
+          group.items.push(header);
+          if (group.items.length === 1) {
+            let icon = <BsFillCaretRightFill/>
+            const toggleGroup = () => {
+              let showGroups = this.state.showGroups;
+              showGroups.push(group);
+              this.setState({ showGroups: showGroups })
+              console.log("toggling");
+            };
+            const groupHeader = (
+              <th className="rotate" key={jobName}>
+                  <div onClick={toggleGroup} style={{ cursor: "pointer" }}>Group: {group.name} {icon}</div>
+              </th>
+            );
+            visibleJobsHeaders.push(groupHeader);
           }
-        >
-          {summarize_job(jobName)}
-        </div>
-      </th>
-    ));
+        }
+
+      } else {
+        visibleJobsHeaders.push(header);
+      }
+    }
+
+    // let dataRows = [];
+    // for (const build of builds) {
+    //   const jobMap = build.sb_map;
+    //   let row = [];
+    //   for (const jobName of visibleJobs) {
+    //     const job = jobMap.get(jobName);
+    //     const group = findGroup(jobName);
+    //     if (group) {
+
+    //     } else {
+    //       row.push(job);
+    //     }
+    //   }
+    //   dataRows.push(row);
+    // }
+    // const visibleJobsHeaders = visibleJobs.map((jobName) => (
+    //   <th className="rotate" key={jobName}>
+    //     <div
+    //       className={
+    //         consecutive_failure_count.has(jobName) ? "failing-header" : ""
+    //       }
+    //     >
+    //       {summarize_job(jobName)}
+    //     </div>
+    //   </th>
+    // ));
 
     const rows = builds.map((build) => {
       let found = false;
       const sb_map = build.sb_map;
 
-      const status_cols = visible_jobs.map((jobName) => {
-        const sb = sb_map.get(jobName);
-        let cell = <Fragment />;
-        if (sb !== undefined) {
-          found = true;
-          cell = (
-            <a
-              href={sb.build_url}
-              className="icon"
-              target="_blank"
-              alt={jobName}
-            >
-              {result_icon(sb.status)}
-            </a>
-          );
+      // console.log(build);
+      const statusCells = [];
+      // group.rowItems[build.id] = {
+      //   added: false,
+      //   jobs: [],
+      // }
+
+      // Get a list of the data for each cell, whether it is a group of jobs or
+      // just a single job
+      let jobCells = [];
+      for (const jobName of visibleJobs) {
+        const group = findGroup(jobName);
+        const job = sb_map.get(jobName);
+        if (group) {
+          if (group.rowItems[build.id] === undefined) {
+            group.rowItems[build.id] = {
+              added: false,
+              jobs: [],
+            }
+          }
+
+          group.rowItems[build.id].jobs.push(job);
+
+          const alreadyAdded = group.rowItems[build.id].added
+          if (!alreadyAdded) {
+            jobCells.push({
+              data: group.rowItems[build.id],
+              name: group.name,
+              isGroup: true,
+            });
+            group.rowItems[build.id].added = true;
+          }
+        } else {
+          jobCells.push({
+            data: job,
+            name: jobName,
+            isGroup: false,
+          });
         }
-
-        return (
-          <Tooltip
-            key={jobName}
-            overlay={jobName}
-            mouseLeaveDelay={0}
-            placement="rightTop"
-            destroyTooltipOnHide={{ keepParent: false }}
-          >
-            <td
-              key={jobName}
-              className="icon-cell"
-              style={{
-                textAlign: "right",
-                fontFamily: "sans-serif",
-                padding: 0,
-              }}
-            >
-              {cell}
-            </td>
-          </Tooltip>
-        );
-      });
-
-      function drop_pr_number(msg) {
-        return msg.replace(/\(#[0-9]+\)/, "");
       }
 
-      function renderPullRequestNumber(comment) {
-        let m = comment.match(/\(#(\d+)\)/);
-        if (m) {
-          return (
-            <Fragment>
-              <a
-                href={"https://github.com/pytorch/pytorch/pull/" + m[1]}
-                target="_blank"
+      for (const job of jobCells) {
+        let tooltipCell = null;
+        if (job.isGroup) {
+          tooltipCell = (
+            <Tooltip
+              key={job.name}
+              overlay={job.name}
+              mouseLeaveDelay={0}
+              placement="rightTop"
+              destroyTooltipOnHide={{ keepParent: false }}
+            >
+              <td
+                key={job.name}
+                className="icon-cell"
+                style={{
+                  textAlign: "right",
+                  fontFamily: "sans-serif",
+                  padding: 0,
+                }}
               >
-                #{m[1]}
-              </a>
-            </Fragment>
+                dog
+              </td>
+            </Tooltip>
+          );
+        } else {
+          tooltipCell = (
+            <Tooltip
+              key={job.name}
+              overlay={job.name}
+              mouseLeaveDelay={0}
+              placement="rightTop"
+              destroyTooltipOnHide={{ keepParent: false }}
+            >
+              <td
+                key={job.name}
+                className="icon-cell"
+                style={{
+                  textAlign: "right",
+                  fontFamily: "sans-serif",
+                  padding: 0,
+                }}
+              >
+                {/* {cell} */}
+                0
+              </td>
+            </Tooltip>
           );
         }
-        m = comment.match(
-          /https:\/\/github.com\/pytorch\/pytorch\/pull\/(\d+)/
-        );
-        if (m) {
-          return (
-            <Fragment>
-              <a
-                href={"https://github.com/pytorch/pytorch/pull/" + m[1]}
-                target="_blank"
-              >
-                #{m[1]}
-              </a>
-            </Fragment>
-          );
-        }
-        return <Fragment />;
+
+        statusCells.push(tooltipCell);
+
       }
+
+      // for (const jobName of visibleJobs) {
+      //   const sb = sb_map.get(jobName);
+      //   const group = findGroup(jobName);
+      //   if (group && !group.rowItems[build.id]) {
+      //     group.rowItems[build.id] = [];
+      //   }
+      //   let cell = <Fragment />;
+      //   if (sb !== undefined) {
+      //     found = true;
+      //     cell = (
+      //       <a
+      //         href={sb.build_url}
+      //         className="icon"
+      //         target="_blank"
+      //         alt={jobName}
+      //       >
+      //         {this.result_icon(sb.status)}
+      //       </a>
+      //     );
+      //   }
+
+      //   const tooltipCell = (
+      //     <Tooltip
+      //       key={jobName}
+      //       overlay={jobName}
+      //       mouseLeaveDelay={0}
+      //       placement="rightTop"
+      //       destroyTooltipOnHide={{ keepParent: false }}
+      //     >
+      //       <td
+      //         key={jobName}
+      //         className="icon-cell"
+      //         style={{
+      //           textAlign: "right",
+      //           fontFamily: "sans-serif",
+      //           padding: 0,
+      //         }}
+      //       >
+      //         {cell}
+      //       </td>
+      //     </Tooltip>
+      //   );
+
+
+      //   if (group) {
+      //     statusCells.push((
+      //       <Tooltip
+      //         key={jobName}
+      //         overlay={jobName}
+      //         mouseLeaveDelay={0}
+      //         placement="rightTop"
+      //         destroyTooltipOnHide={{ keepParent: false }}
+      //       >
+      //         <td
+      //           key={jobName}
+      //           className="icon-cell"
+      //           style={{
+      //             textAlign: "right",
+      //             fontFamily: "sans-serif",
+      //             padding: 0,
+      //           }}
+      //         >
+      //           dog
+      //         </td>
+      //       </Tooltip>
+      //     ));
+      //   } else {
+      //     statusCells.push(tooltipCell);
+      //   }
+      // }
+
 
       let author = build.author.username
         ? build.author.username
@@ -423,7 +643,7 @@ export default class BuildHistoryDisplay extends Component {
 
       const desc = (
         <div key={build.id}>
-          {drop_pr_number(build.message).split("\n")[0]}{" "}
+          {this.drop_pr_number(build.message).split("\n")[0]}{" "}
           <code>
             <a
               href={"https://github.com/pytorch/pytorch/commit/" + build.id}
@@ -436,31 +656,93 @@ export default class BuildHistoryDisplay extends Component {
       );
 
       // TODO: Too lazy to set up PR numbers for the old ones
-
       let stale = false;
 
       // TODO: need to store this in index or payload
       const whenString = summarize_date(build.timestamp);
 
-      if (!found) {
-        return <Fragment key={build.id} />;
-      }
+      // if (!found) {
+      //   return <Fragment key={build.id} />;
+      // }
 
+      console.log("Returning row");
       return (
         <tr key={build.id} className={stale ? "stale" : ""}>
           <th className="left-cell">
-            {renderPullRequestNumber(build.message)}
+            {this.renderPullRequestNumber(build.message)}
           </th>
           <td className="left-cell" title={build.timestamp}>
             {whenString}
           </td>
-          {status_cols}
+          {statusCells}
           <td className="right-cell">{author}</td>
           <td className="right-cell">{desc}</td>
         </tr>
       );
     });
 
+    console.log(rows);
+    const options = (
+      <ul className="menu">
+        <li>
+          <input
+            type="checkbox"
+            name="show-notifications"
+            checked={this.state.showNotifications}
+            onChange={(e) =>
+              this.setState({ showNotifications: e.target.checked })
+            }
+          />
+          <label htmlFor="show-notifications">
+            Show notifications on master failure
+            {(this.state.showNotifications && Notification.permission) ===
+            "denied" ? (
+              <Fragment>
+                {" "}
+                <strong>(WARNING: notifications are currently denied)</strong>
+              </Fragment>
+            ) : (
+              ""
+            )}
+          </label>
+        </li>
+        <br />
+        <li>
+          <input
+            type="checkbox"
+            name="show-service-jobs"
+            checked={this.state.showServiceJobs}
+            onChange={(e) =>
+              this.setState({ showServiceJobs: e.target.checked })
+            }
+          />
+          <label htmlFor="show-service-jobs">Show service jobs</label>
+        </li>
+        <br />
+        <li>
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              let filter = document.getElementById("job-name-filter");
+              this.setState({ jobNameFilter: filter.value });
+            }}
+          >
+            <label htmlFor="job-name-filter">Name filter:&nbsp;</label>
+            <input
+              type="input"
+              name="job-name-filter"
+              id="job-name-filter"
+              value={this.jobNameFilter ? this.jobNameFilter : undefined}
+            />
+            <input style={{ marginLeft: "3px" }} type="submit" value="Go" />
+          </form>
+        </li>
+      </ul>
+    );
+
+    let x = <p>eow</p>;
+    console.log(x);
+    console.log(rows);
     return (
       <div>
         <h2>
@@ -472,70 +754,13 @@ export default class BuildHistoryDisplay extends Component {
             updateTime={this.state.updateTime}
           />
         </h2>
-        <div>
-          <ul className="menu">
-            <li>
-              <input
-                type="checkbox"
-                name="show-notifications"
-                checked={this.state.showNotifications}
-                onChange={(e) =>
-                  this.setState({ showNotifications: e.target.checked })
-                }
-              />
-              <label htmlFor="show-notifications">
-                Show notifications on master failure
-                {Notification.permission === "denied" ? (
-                  <Fragment>
-                    {" "}
-                    <strong>
-                      (WARNING: notifications are currently denied)
-                    </strong>
-                  </Fragment>
-                ) : (
-                  ""
-                )}
-              </label>
-            </li>
-            <br />
-            <li>
-              <input
-                type="checkbox"
-                name="show-service-jobs"
-                checked={this.state.showServiceJobs}
-                onChange={(e) =>
-                  this.setState({ showServiceJobs: e.target.checked })
-                }
-              />
-              <label htmlFor="show-service-jobs">Show service jobs</label>
-            </li>
-            <br />
-            <li>
-              <form
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  let filter = document.getElementById("job-name-filter");
-                  this.setState({ jobNameFilter: filter.value });
-                }}
-              >
-                <label htmlFor="job-name-filter">Name filter:&nbsp;</label>
-                <input
-                  type="input"
-                  name="job-name-filter"
-                  id="job-name-filter"
-                  value={this.jobNameFilter ? this.jobNameFilter : undefined}
-                />
-                <input style={{ marginLeft: "3px" }} type="submit" value="Go" />
-              </form>
-            </li>
-          </ul>
-        </div>
+        <div>{options}</div>
         <table className="buildHistoryTable">
           <thead>
             <tr>
               <th className="left-cell">PR#</th>
               <th className="left-cell">Date</th>
-              {visible_jobs_head}
+              {visibleJobsHeaders}
               <th className="right-cell">User</th>
               <th className="right-cell">Description</th>
             </tr>

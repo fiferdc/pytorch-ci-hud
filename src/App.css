@@ -45,7 +45,7 @@ td {
   border: 0;
 }
 
-.buildHistoryTable tr:hover {
+.buildHistoryTable tbody tr:hover {
   background: #ccc;
 }
 
